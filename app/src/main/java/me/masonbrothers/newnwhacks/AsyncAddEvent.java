@@ -62,7 +62,7 @@ public class AsyncAddEvent extends EventAsyncTask{
      */
     void createEventAndSendInvites(String summary, DateTime startDateTime, DateTime endDateTime, EventAttendee[] attendees ){
         Event event = new Event()
-                .setSummary(summary)
+                .setSummary("This is an event name")
                 .setLocation("800 Howard St., San Francisco, CA 94103")
                 .setDescription("A chance to hear more about Google's developer products.");
 

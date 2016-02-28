@@ -170,11 +170,14 @@ public class MainActivity extends FragmentActivity {
                 new EventAttendee().setEmail("calvinhyxu@gmail.com")
         };
 
-        AsyncFindSquad.run(this);
+        AsyncAddEvent.run(this, "help", new DateTime(System.currentTimeMillis()), new DateTime(System.currentTimeMillis() + 50000000), attendees);
+//
+//
+//        AsyncFindSquad.run(this);
+//        if(squadTimes == null){return;}
+//        Intent intent = new Intent(MainActivity.this, setMeet.class);
+//        startActivity(intent);
 
-
-
-        //   AsyncAddEvent.run(this, "help", new DateTime(System.currentTimeMillis()), new DateTime(System.currentTimeMillis() + 50000000), attendees);
     }
 
     void showGooglePlayServicesAvailabilityErrorDialog(final int connectionStatusCode) {
