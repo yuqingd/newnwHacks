@@ -7,6 +7,8 @@ import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccoun
 import com.google.api.client.googleapis.extensions.android.gms.auth.GooglePlayServicesAvailabilityIOException;
 import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
 
+import java.util.Date;
+
 import com.google.api.client.http.HttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.jackson2.JacksonFactory;
@@ -16,21 +18,30 @@ import com.google.api.services.calendar.CalendarScopes;
 import com.google.api.client.util.DateTime;
 
 import com.google.api.services.calendar.model.*;
+import com.roomorama.caldroid.CaldroidFragment;
+import com.roomorama.caldroid.CaldroidListener;
 
 import android.accounts.AccountManager;
 import android.app.Activity;
 import android.app.Dialog;
+import android.app.FragmentTransaction;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Resources;
+import android.graphics.drawable.Drawable;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.support.v4.app.FragmentActivity;
+import android.support.v4.content.ContextCompat;
 import android.text.TextUtils;
 import android.text.method.ScrollingMovementMethod;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.CalendarView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -38,19 +49,31 @@ import android.widget.Toast;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.Calendar;
 
-public class MainActivity extends Activity {
-    GoogleAccountCredential mCredential;
+public class MainActivity extends FragmentActivity {
     private TextView mOutputText;
     ProgressDialog mProgress;
 
-    private List<Event> userEvents;
+    private CaldroidFragment caldroidFragment;
+
+    public static List<Event> userEvents;
 
     static final int REQUEST_ACCOUNT_PICKER = 1000;
     static final int REQUEST_AUTHORIZATION = 1001;
     static final int REQUEST_GOOGLE_PLAY_SERVICES = 1002;
     private static final String PREF_ACCOUNT_NAME = "accountName";
     private static final String[] SCOPES = {CalendarScopes.CALENDAR_READONLY};
+
+    com.google.api.services.calendar.Calendar client;
+    GoogleAccountCredential credential;
+
+    final HttpTransport transport = AndroidHttp.newCompatibleTransport();
+    final JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
+
+
+    Drawable drawable;
+
 
     /**
      * Create the main activity.
@@ -62,82 +85,94 @@ public class MainActivity extends Activity {
 
         super.onCreate(savedInstanceState);
 
+        this.drawable = ContextCompat.getDrawable(this, R.drawable.sign_check_icon);
+
+
+        this.caldroidFragment = new CaldroidFragment();
+        Bundle args = new Bundle();
+        Calendar cal = Calendar.getInstance();
+        args.putInt(CaldroidFragment.MONTH, cal.get(Calendar.MONTH) + 1);
+        args.putInt(CaldroidFragment.YEAR, cal.get(Calendar.YEAR));
+        caldroidFragment.setArguments(args);
+
+        android.support.v4.app.FragmentTransaction t = getSupportFragmentManager().beginTransaction();
+        t.replace(R.id.datePicker, caldroidFragment);
+        t.commit();
+
         setContentView(R.layout.activity_main);
 
-        CalendarView cal = (CalendarView) findViewById(R.id.calendarView2);
-
-        cal.setOnDateChangeListener(new CalendarView.OnDateChangeListener() {
-
-            @Override
-            public void onSelectedDayChange(CalendarView view, int year, int month,
-                                            int dayOfMonth) {
-                // TODO Auto-generated method stub
-
-                Event testEv = userEvents.get(0);
-                String originalStartTime = testEv.getStart().getDate().toString().substring(0, 10);
-
-                String month2 = "";
-                String day2 = "";
-
-                if(month < 10) {month2 = "0" + month;}
-                if(dayOfMonth < 10) {day2 = "0" + dayOfMonth;}
-
-                String compare = year + "-" + month2 + "-" + day2;
-
-                if(originalStartTime.equals(compare)) {
-                    Toast.makeText(getBaseContext(), "Selected Date is\n\n"
-                                    + userEvents.get(0).getSummary(),
-                            //+ dayOfMonth + " : " + month + " : " + year,
-                            Toast.LENGTH_LONG).show();
-                }
-            }
-        });
-
-        LinearLayout activityLayout = new LinearLayout(this);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT);
-        activityLayout.setLayoutParams(lp);
-        activityLayout.setOrientation(LinearLayout.VERTICAL);
-        activityLayout.setPadding(16, 16, 16, 16);
-
-        ViewGroup.LayoutParams tlp = new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-
-        mOutputText = new TextView(this);
-        mOutputText.setLayoutParams(tlp);
-        mOutputText.setPadding(16, 16, 16, 16);
-        mOutputText.setVerticalScrollBarEnabled(true);
-        mOutputText.setMovementMethod(new ScrollingMovementMethod());
-        activityLayout.addView(mOutputText);
 
         mProgress = new ProgressDialog(this);
         mProgress.setMessage("Calling Google Calendar API ...");
 
-       // setContentView(activityLayout);
-
-        // Initialize credentials and service object.
+        credential =
+                GoogleAccountCredential.usingOAuth2(this, Collections.singleton(CalendarScopes.CALENDAR));
         SharedPreferences settings = getPreferences(Context.MODE_PRIVATE);
-        mCredential = GoogleAccountCredential.usingOAuth2(
-                getApplicationContext(), Arrays.asList(SCOPES))
-                .setBackOff(new ExponentialBackOff())
-                .setSelectedAccountName(settings.getString(PREF_ACCOUNT_NAME, null));
+        credential.setSelectedAccountName(settings.getString(PREF_ACCOUNT_NAME, null));
+        // Calendar client
+        client = new com.google.api.services.calendar.Calendar.Builder(
+                transport, jsonFactory, credential).setApplicationName("Google-CalendarAndroidSample/1.0")
+                .build();
+
+        CaldroidListener listener = new CaldroidListener() {
+            @Override
+            public void onSelectDate(Date date, View view) {
+                for(Event currentEvent : userEvents){
+                    EventDateTime originalStartTime = currentEvent.getStart();
+                    DateTime startTime;
+
+                    if (originalStartTime.getDate() == null) {
+                        startTime = originalStartTime.getDateTime();
+                    } else {
+                        startTime = originalStartTime.getDate();
+                    }
+                    Date actualDate = new Date(startTime.getValue());
+
+                    String passedDate = date.toString().substring(0, 10);
+                    String actualDateString = actualDate.toString().substring(0, 10);
+
+                    String eventSummary = "No Summary Available. ):";
+                    String eventLocation = "No Location Available. ):";
+                    String eventTime = "No Time Available. ):";
+
+                    if(currentEvent.getSummary() != null) {
+                       eventSummary = "Summary: " + currentEvent.getSummary();
+                    }
+                    if(currentEvent.getLocation() != null){
+                        eventLocation = "Location: " + currentEvent.getLocation();
+                    }
+                    if(actualDate.toString() != null){
+                        eventTime = "Date and Time: " + actualDate.toString();
+                    }
+
+                    if(actualDateString.equals(passedDate)){
+                        Toast.makeText(getApplicationContext(), "Event Details: " + "\n" + eventSummary + "\n" + eventLocation + "\n" + eventTime + "\n",
+                                Toast.LENGTH_SHORT).show();
+                    }
+
+                }
+            }
+        };
+
+        caldroidFragment.setCaldroidListener(listener);
     }
 
 
-    /**
-     * Called whenever this activity is pushed to the foreground, such as after
-     * a call to onCreate().
-     */
+    void showGooglePlayServicesAvailabilityErrorDialog(final int connectionStatusCode) {
+        runOnUiThread(new Runnable() {
+            public void run() {
+                Dialog dialog = GooglePlayServicesUtil.getErrorDialog(
+                        connectionStatusCode, MainActivity.this, REQUEST_GOOGLE_PLAY_SERVICES);
+                dialog.show();
+            }
+        });
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
-        if (isGooglePlayServicesAvailable()) {
-            refreshResults();
-        } else {
-            mOutputText.setText("Google Play Services required: " +
-                    "after installing, close and relaunch this app.");
+        if (checkGooglePlayServicesAvailable()) {
+            haveGooglePlayServices();
         }
     }
 
@@ -153,58 +188,40 @@ public class MainActivity extends Activity {
      *                    activity result.
      */
     @Override
-    protected void onActivityResult(
-            int requestCode, int resultCode, Intent data) {
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         switch (requestCode) {
             case REQUEST_GOOGLE_PLAY_SERVICES:
-                if (resultCode != RESULT_OK) {
-                    isGooglePlayServicesAvailable();
-                }
-                break;
-            case REQUEST_ACCOUNT_PICKER:
-                if (resultCode == RESULT_OK && data != null &&
-                        data.getExtras() != null) {
-                    String accountName =
-                            data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
-                    if (accountName != null) {
-                        mCredential.setSelectedAccountName(accountName);
-                        SharedPreferences settings =
-                                getPreferences(Context.MODE_PRIVATE);
-                        SharedPreferences.Editor editor = settings.edit();
-                        editor.putString(PREF_ACCOUNT_NAME, accountName);
-                        editor.apply();
-                    }
-                } else if (resultCode == RESULT_CANCELED) {
-                    mOutputText.setText("Account unspecified.");
+                if (resultCode == Activity.RESULT_OK) {
+                    haveGooglePlayServices();
+                } else {
+                    checkGooglePlayServicesAvailable();
                 }
                 break;
             case REQUEST_AUTHORIZATION:
-                if (resultCode != RESULT_OK) {
+                if (resultCode == Activity.RESULT_OK) {
+                    AsyncLoadEvents.run(this);
+                } else {
                     chooseAccount();
                 }
                 break;
-        }
+            case REQUEST_ACCOUNT_PICKER:
+                if (resultCode == Activity.RESULT_OK && data != null && data.getExtras() != null) {
+                    String accountName = data.getExtras().getString(AccountManager.KEY_ACCOUNT_NAME);
+                    if (accountName != null) {
+                        credential.setSelectedAccountName(accountName);
+                        SharedPreferences settings = getPreferences(Context.MODE_PRIVATE);
+                        SharedPreferences.Editor editor = settings.edit();
+                        editor.putString(PREF_ACCOUNT_NAME, accountName);
+                        editor.commit();
+                        AsyncLoadEvents.run(this);
+                    }
+                }
+                break;
 
-        super.onActivityResult(requestCode, resultCode, data);
-    }
-
-    /**
-     * Attempt to get a set of data from the Google Calendar API to display. If the
-     * email address isn't known yet, then call chooseAccount() method so the
-     * user can pick an account.
-     */
-    private void refreshResults() {
-        if (mCredential.getSelectedAccountName() == null) {
-            chooseAccount();
-        } else {
-            if (isDeviceOnline()) {
-                new MakeRequestTask(mCredential).execute();
-            } else {
-                mOutputText.setText("No network connection available.");
-            }
         }
     }
+
 
     /**
      * Starts an activity in Google Play Services so the user can pick an
@@ -212,7 +229,7 @@ public class MainActivity extends Activity {
      */
     private void chooseAccount() {
         startActivityForResult(
-                mCredential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
+                credential.newChooseAccountIntent(), REQUEST_ACCOUNT_PICKER);
     }
 
     /**
@@ -235,136 +252,46 @@ public class MainActivity extends Activity {
      * @return true if Google Play Services is available and up to
      * date on this device; false otherwise.
      */
-    private boolean isGooglePlayServicesAvailable() {
-        final int connectionStatusCode =
-                GooglePlayServicesUtil.isGooglePlayServicesAvailable(this);
+    private boolean checkGooglePlayServicesAvailable() {
+        final int connectionStatusCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(this);
         if (GooglePlayServicesUtil.isUserRecoverableError(connectionStatusCode)) {
             showGooglePlayServicesAvailabilityErrorDialog(connectionStatusCode);
-            return false;
-        } else if (connectionStatusCode != ConnectionResult.SUCCESS) {
             return false;
         }
         return true;
     }
 
-    /**
-     * Display an error dialog showing that Google Play Services is missing
-     * or out of date.
-     *
-     * @param connectionStatusCode code describing the presence (or lack of)
-     *                             Google Play Services on this device.
-     */
-    void showGooglePlayServicesAvailabilityErrorDialog(
-            final int connectionStatusCode) {
-        Dialog dialog = GooglePlayServicesUtil.getErrorDialog(
-                connectionStatusCode,
-                MainActivity.this,
-                REQUEST_GOOGLE_PLAY_SERVICES);
-        dialog.show();
-    }
-
-    /**
-     * An asynchronous task that handles the Google Calendar API call.
-     * Placing the API calls in their own task ensures the UI stays responsive.
-     */
-    private class MakeRequestTask extends AsyncTask<Void, Void, List<String>> {
-        private com.google.api.services.calendar.Calendar mService = null;
-        private Exception mLastError = null;
-
-        public MakeRequestTask(GoogleAccountCredential credential) {
-            HttpTransport transport = AndroidHttp.newCompatibleTransport();
-            JsonFactory jsonFactory = JacksonFactory.getDefaultInstance();
-            mService = new com.google.api.services.calendar.Calendar.Builder(
-                    transport, jsonFactory, credential)
-                    .setApplicationName("Google Calendar API Android Quickstart")
-                    .build();
-        }
-
-        /**
-         * Background task to call Google Calendar API.
-         *
-         * @param params no parameters needed for this task.
-         */
-        @Override
-        protected List<String> doInBackground(Void... params) {
-            try {
-                return getDataFromApi();
-            } catch (Exception e) {
-                mLastError = e;
-                cancel(true);
-                return null;
-            }
-        }
-
-        /**
-         * Fetch a list of the next 10 events from the primary calendar.
-         *
-         * @return List of Strings describing returned events.
-         * @throws IOException
-         */
-        private List<String> getDataFromApi() throws IOException {
-            // List the next 10 events from the primary calendar.
-            DateTime now = new DateTime(System.currentTimeMillis());
-            List<String> eventStrings = new ArrayList<String>();
-            Events events = mService.events().list("primary")
-                    .setMaxResults(10)
-                    .setTimeMin(now)
-                    .setOrderBy("startTime")
-                    .setSingleEvents(true)
-                    .execute();
-            List<Event> items = events.getItems();
-            userEvents = items;
-
-            for (Event event : items) {
-                DateTime start = event.getStart().getDateTime();
-                if (start == null) {
-                    // All-day events don't have start times, so just use
-                    // the start date.
-                    start = event.getStart().getDate();
-                }
-                eventStrings.add(
-                        String.format("%s (%s)", event.getSummary(), start));
-            }
-            return eventStrings;
-        }
-
-
-        @Override
-        protected void onPreExecute() {
-            mOutputText.setText("");
-            mProgress.show();
-        }
-
-        @Override
-        protected void onPostExecute(List<String> output) {
-            mProgress.hide();
-            if (output == null || output.size() == 0) {
-                mOutputText.setText("No results returned.");
-            } else {
-                output.add(0, "Data retrieved using the Google Calendar API:");
-                mOutputText.setText(TextUtils.join("\n", output));
-            }
-        }
-
-        @Override
-        protected void onCancelled() {
-            mProgress.hide();
-            if (mLastError != null) {
-                if (mLastError instanceof GooglePlayServicesAvailabilityIOException) {
-                    showGooglePlayServicesAvailabilityErrorDialog(
-                            ((GooglePlayServicesAvailabilityIOException) mLastError)
-                                    .getConnectionStatusCode());
-                } else if (mLastError instanceof UserRecoverableAuthIOException) {
-                    startActivityForResult(
-                            ((UserRecoverableAuthIOException) mLastError).getIntent(),
-                            MainActivity.REQUEST_AUTHORIZATION);
-                } else {
-                    mOutputText.setText("The following error occurred:\n"
-                            + mLastError.getMessage());
-                }
-            } else {
-                mOutputText.setText("Request cancelled.");
-            }
+    private void haveGooglePlayServices() {
+        // check if there is already an account selected
+        if (credential.getSelectedAccountName() == null) {
+            // ask user to choose account
+            chooseAccount();
+        } else {
+            // load calendars
+            AsyncLoadEvents.run(this);
         }
     }
+
+
+    void refreshView() {
+        AsyncLoadEvents.run(this);
+
+        for(Event currentEvent : userEvents){
+            EventDateTime originalStartTime = currentEvent.getStart();
+            DateTime startTime;
+
+            if (originalStartTime.getDate() == null) {
+                startTime = originalStartTime.getDateTime();
+            } else {
+                startTime = originalStartTime.getDate();
+            }
+
+            Date actualDate = new Date(startTime.getValue());
+
+            caldroidFragment.setBackgroundDrawableForDate(drawable, actualDate);
+            caldroidFragment.refreshView();
+
+        }
+    }
+
 }
